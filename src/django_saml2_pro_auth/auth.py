@@ -9,6 +9,8 @@ from six import iteritems
 
 from .utils import SAMLError, SAMLSettingsError, prepare_django_request
 
+import distutils
+
 
 def get_provider_index(request):
     """Helper to get the saml config index of a provider in order to grab
@@ -58,6 +60,28 @@ def get_clean_map(user_map, saml_data):
     return final_map
 
 
+def follow_chain(obj, chain, value=None):
+    if len(chain) == 1:
+        if value is not None:
+            value = convert_request_value(obj, chain[0], value)
+            setattr(obj, chain[0], value)
+            obj.save()
+        return getattr(obj, chain[0])
+    else:
+        intermediate = getattr(obj, chain[0])
+        return follow_chain(intermediate, chain[1:], value)
+
+
+def convert_request_value(obj, field_name, value):
+    """
+    Cast whatever value we receive from the request, which is always a string,
+    into the appropriate type. Only handles booleans for now.
+    """
+    if obj._meta.get_field(field_name).get_internal_type() == 'BooleanField':
+        value = bool(distutils.util.strtobool(value))
+    return value
+
+
 class Backend(object): # pragma: no cover
 
     def authenticate(self, request):
@@ -77,10 +101,30 @@ class Backend(object): # pragma: no cover
             lookup_attribute: final_map[lookup_attribute]
         }
 
+        # Handle fields to related models for storage, most useful for profile
+        # models, but more generic/flexible in case people do weird stuff.
+        # If there are dots in it, it's a foreign field, else local
+        foreign_field_map = {
+            k: v
+            for k, v in final_map.items()
+            if '.' in k
+        }
+        local_field_map = {
+            k: v
+            for k, v in final_map.items()
+            if '.' not in k
+        }
+
         if sync_attributes:
-            user, _ = User.objects.update_or_create(defaults=final_map, **lookup_map)
+            user, _ = User.objects.update_or_create(defaults=local_field_map, **lookup_map)
+            for k, v in foreign_field_map.items():
+                chain = k.split('.')
+                follow_chain(user, chain, v)
         else:
-            user, _ = User.objects.get_or_create(defaults=final_map, **lookup_map)
+            user, _ = User.objects.get_or_create(defaults=local_field_map, **lookup_map)
+            for k, v in foreign_field_map.items():
+                chain = k.split('.')
+                follow_chain(user, chain, v)
 
         if user.is_active:
             return user
