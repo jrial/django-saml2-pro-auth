@@ -53,7 +53,11 @@ def prepare_django_request(request):
     http_host = request.get_host()
 
     if 'HTTP_X_FORWARDED_FOR' in request.META:
-        server_port = None
+        if ':' in http_host:
+            current_host_data = http_host.split(':')
+            server_port = current_host_data[-1]
+        else:
+            server_port = None
         https = request.META.get('HTTP_X_FORWARDED_PROTO') == 'https'
     else:
         server_port = request.META.get('SERVER_PORT')
