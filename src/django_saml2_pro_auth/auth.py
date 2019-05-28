@@ -60,8 +60,44 @@ def get_clean_map(user_map, saml_data):
     return final_map
 
 
+def get_split_field_map(field_map):
+    """
+    Split a field map into a local and foreign map. Local fields are fields on
+    the user model; foreign fields are fields on models reachable through the
+    user model.
+    """
+    local_field_map = {
+        k: v
+        for k, v in field_map.items()
+        if '.' not in k
+    }
+    foreign_field_map = {
+        k: v
+        for k, v in field_map.items()
+        if '.' in k
+    }
+    return local_field_map, foreign_field_map
+
+
 def process_attr_chain(user, field_map):
-    def follow_chain(obj, chain, value=None):
+    """
+    Given a foreign field map, store all attributes on the proper objects.
+    """
+
+    def convert_request_value(obj, field_name, value):
+        """
+        Cast whatever value we receive from the request, which is always a
+        string, into the appropriate type. Only handles booleans for now.
+        """
+        if obj._meta.get_field(field_name).get_internal_type() == 'BooleanField':
+            value = bool(distutils.util.strtobool(value))
+        return value
+
+    def store_end_of_chain(obj, chain, value=None):
+        """
+        Store a value on the object at the end of a dot-joined chain of
+        attributes.
+        """
         if len(chain) == 1:
             if value is not None:
                 value = convert_request_value(obj, chain[0], value)
@@ -70,38 +106,11 @@ def process_attr_chain(user, field_map):
             return getattr(obj, chain[0])
         else:
             intermediate = getattr(obj, chain[0])
-            return follow_chain(intermediate, chain[1:], value)
+            return store_end_of_chain(intermediate, chain[1:], value)
 
     for k, v in field_map.items():
         chain = k.split('.')
-        follow_chain(user, chain, v)
-
-
-def get_split_field_map(final_map):
-        # Handle fields to related models for storage, most useful for profile
-        # models, but more generic/flexible in case people do weird stuff.
-        # If there are dots in it, it's a foreign field, else local
-        local_field_map = {
-            k: v
-            for k, v in final_map.items()
-            if '.' not in k
-        }
-        foreign_field_map = {
-            k: v
-            for k, v in final_map.items()
-            if '.' in k
-        }
-        return local_field_map, foreign_field_map
-
-
-def convert_request_value(obj, field_name, value):
-    """
-    Cast whatever value we receive from the request, which is always a string,
-    into the appropriate type. Only handles booleans for now.
-    """
-    if obj._meta.get_field(field_name).get_internal_type() == 'BooleanField':
-        value = bool(distutils.util.strtobool(value))
-    return value
+        store_end_of_chain(user, chain, v)
 
 
 class Backend(object): # pragma: no cover
